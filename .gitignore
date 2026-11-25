@@ -1,0 +1,15 @@
+# В рабочей папке хранятся действующие ключи Matter и личный ярлык.
+# Для публикации открываем только проверенные файлы, каждый по имени.
+*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/AGENTS.md
+!/docs/
+!/docs/пульт.md
+!/remote/
+!/remote/server.py
+!/remote/install.py
+!/remote/index.html
+!/remote/app.js
+!/remote/icon.png
