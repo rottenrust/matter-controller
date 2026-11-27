@@ -5,6 +5,11 @@ const palette = [
   ['Голубой', '#58bfff'], ['Фиолетовый', '#9a75ff'], ['Розовый', '#ff77bd']
 ];
 let state, working = false, reading = false, revision = 0, tabChoice, editing;
+let target = 'lamp';
+const pending = new Set();
+function sharedBusy() {
+  el('sharedControls').disabled = pending.has('garland') || (target === 'both' && (pending.has('lamp') || working));
+}
 function tab(color) {
   el('colors').hidden = !color; el('whites').hidden = color;
   el('colorTab').setAttribute('aria-pressed', String(color));
@@ -61,32 +66,38 @@ function unavailable(error){
   el('reading').textContent='Недоступна';el('hero').classList.add('unknown');busy(true);
 }
 async function refresh(){
-  if(working||reading||document.hidden) return;
+  if(target!=='lamp'||working||pending.has('lamp')||reading||document.hidden) return;
   const at=revision;reading=true;
   try{
     const s=await api('state');
     if(at!==revision) return;
     paint(s);busy(false);el('status').textContent='На связи';el('msg').textContent='';
   }catch(e){if(at===revision) unavailable(e);}
-  finally{reading=false;}
+  finally{
+    reading=false;
+    if(at!==revision && target==='lamp') refresh();
+  }
 }
 async function send(action,values={}) {
-  if(working||!state) return;
+  if(working||pending.has('lamp')||!state) return;
   revision++; working=true;busy(true);el('status').textContent='Отправка…';el('msg').textContent='';
   try{
     await api('command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...values})});
     el('status').textContent='Проверяем…';
     paint(await api('state'));busy(false);el('status').textContent='На связи';
   }catch(e){unavailable(e);}
-  finally{working=false;}
+  finally{working=false;sharedBusy();}
 }
 const fade=()=>Number(el('fade').value);
 function color(hex){tabChoice=true;send('color',{...colorValues(hex),fade:fade()});}
-for(const [name,hex] of palette) {
+function addPalette(id, choose) {
+ for(const [name,hex] of palette) {
   const b=document.createElement('button');b.style.backgroundColor=hex;b.title=name;
-  b.setAttribute('aria-label',name);b.dataset.hex=hex;b.onclick=()=>color(hex);
-  el('swatches').insertBefore(b,el('swatches').lastElementChild);
+  b.setAttribute('aria-label',name);b.dataset.hex=hex;b.onclick=()=>choose(hex);
+  el(id).insertBefore(b,el(id).lastElementChild);
+ }
 }
+addPalette('swatches',color);
 el('custom').onchange=e=>color(e.target.value);
 el('colorTab').onclick=()=>tab(tabChoice=true);
 el('whiteTab').onclick=()=>tab(tabChoice=false);
@@ -103,5 +114,75 @@ for(const id of ['period','direction']) el(id).onchange=()=>{if(state.ColorLoopA
 el('timer').onclick=()=>send('timer',{minutes:state.OnTime?0:Number(el('minutes').value)});
 el('startup').onchange=e=>send('startup',{value:e.target.value});
 el('identify').onclick=()=>send('identify');
+function selectTarget(next) {
+  if (target === next) return;
+  target = next;
+  const lamp = next === 'lamp';
+  el('lampView').hidden = !lamp;
+  el('sharedView').hidden = lamp;
+  el('status').hidden = !lamp;
+  el('lampResult').hidden = next !== 'both';
+  el('sharedTitle').textContent = next === 'both' ? 'Лампа и гирлянда' : 'Гирлянда';
+  for (const b of document.querySelectorAll('[data-target]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.target === next));
+  }
+  sharedBusy();
+  if (lamp) {
+    revision++;
+    state = null;
+    busy(true);
+    el('status').textContent = 'Проверяем…';
+    refresh();
+  }
+}
+for (const b of document.querySelectorAll('[data-target]')) {
+  b.onclick = () => selectTarget(b.dataset.target);
+}
+
+async function sharedCommand(action, values) {
+  const devices = target === 'both' ? ['lamp', 'garland'] : ['garland'];
+  if (el('sharedControls').disabled) return;
+  await Promise.all(devices.map(async device => {
+    const lamp = device === 'lamp';
+    const output = el(device + 'Result');
+    const prefix = lamp ? 'Лампа · ' : 'Гирлянда · ';
+    if (action === 'color' && values.hex === '#000000') {
+      output.textContent = prefix + 'для чёрного цвета нажмите «Выключить».';
+      return;
+    }
+    pending.add(device);
+    sharedBusy();
+    if (lamp) { revision++; busy(true); }
+    output.textContent = prefix + 'отправка…';
+    try {
+      let params = values;
+      if (lamp && action === 'color') params = {...colorValues(values.hex), fade:0};
+      if (lamp && action === 'brightness') params = {...values, fade:0};
+      const reply = await api(lamp ? 'command' : 'garland', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action,...params})
+      });
+      output.textContent = prefix + (lamp ? 'команда подтверждена.' : 'отправлено: ' + reply.last + '.');
+    } catch (e) {
+      output.textContent = prefix + e.message;
+    } finally {
+      pending.delete(device);
+      sharedBusy();
+      if (lamp && target === 'lamp') refresh();
+    }
+  }));
+}
+
+el('turnOn').onclick = () => sharedCommand('power', {on:true});
+el('turnOff').onclick = () => sharedCommand('power', {on:false});
+el('sharedLevel').oninput = e => { el('sharedValue').textContent = e.target.value + ' %'; };
+el('applyLevel').onclick = () => sharedCommand('brightness', {value:Number(el('sharedLevel').value)});
+const sharedColor = hex => sharedCommand('color', {hex});
+addPalette('sharedSwatches', sharedColor);
+el('sharedColor').onchange = e => sharedColor(e.target.value);
+api('garland').then(reply => {
+  if (reply.last && el('garlandResult').textContent === 'Гирлянда · —') {
+    el('garlandResult').textContent = 'Гирлянда · отправлено: ' + reply.last + '.';
+  }
+}).catch(() => {});
 document.addEventListener('visibilitychange',refresh);window.addEventListener('pageshow',refresh);
 refresh();setInterval(refresh,8000);

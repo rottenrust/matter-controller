@@ -9,7 +9,10 @@
 !/docs/пульт.md
 !/remote/
 !/remote/server.py
+!/remote/chip_session.py
+!/remote/test_server.py
 !/remote/install.py
 !/remote/index.html
 !/remote/app.js
 !/remote/icon.png
+!/remote/garland.swift
